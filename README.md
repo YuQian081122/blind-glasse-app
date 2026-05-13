@@ -1,4 +1,4 @@
-# Blind Glasses App（導盲眼鏡 Android）
+# blind-glasse-app（導盲眼鏡 Android）
 
 本倉庫根目錄即 **Android Gradle 專案根**（含 `app/`、`gradle/`、`settings.gradle.kts` 等），請以 Android Studio **Open** 本目錄，勿再多包一層 `App1` 資料夾。
 
