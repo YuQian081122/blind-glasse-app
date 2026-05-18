@@ -28,6 +28,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disconnect() = bleManager.disconnect()
 
+    /** 清除「掃描完成、裝置清單」狀態，使返回首頁時不會再自動打開底部表。 */
+    fun dismissDeviceListResults() = bleManager.clearDevicesFoundState()
+
     fun writeWifiCredentials(ssid: String, password: String): Boolean {
         return bleManager.writeWifiCredentials(ssid, password)
     }

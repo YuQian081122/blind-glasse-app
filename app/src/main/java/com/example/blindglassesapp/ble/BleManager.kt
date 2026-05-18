@@ -89,6 +89,13 @@ class BleManager(context: Context) {
         handler.removeCallbacksAndMessages(null)
     }
 
+    /** 掃描結果仍為 [BleConnectionState.DevicesFound] 時，關閉清單或進入其他頁面前呼叫，避免返回首頁再次自動彈出清單。 */
+    fun clearDevicesFoundState() {
+        if (_state.value is BleConnectionState.DevicesFound) {
+            _state.value = BleConnectionState.Idle
+        }
+    }
+
     private val scanCallback = object : ScanCallback() {
         @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -104,31 +111,52 @@ class BleManager(context: Context) {
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
         stopScan()
-        bluetoothGatt?.close()
+        // 先清目前 GATT 參考再 close，否則舊連線晚到的 DISCONNECTED 會覆寫「連線中／已連線」狀態。
+        val oldGatt = bluetoothGatt
+        bluetoothGatt = null
+        oldGatt?.close()
         val name = device.name ?: device.address
         _state.value = BleConnectionState.Connecting(name)
-        bluetoothGatt = device.connectGatt(appContext, false, gattCallback)
+        bluetoothGatt =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            } else {
+                @Suppress("DEPRECATION")
+                device.connectGatt(appContext, false, gattCallback)
+            }
     }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
-        bluetoothGatt?.close()
+        val g = bluetoothGatt
         bluetoothGatt = null
+        g?.close()
         _state.value = BleConnectionState.Disconnected
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (gatt != bluetoothGatt) {
+                Log.w(TAG, "Ignoring stale GATT state change (session replaced): status=$status newState=$newState")
+                return
+            }
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    Log.i(TAG, "Connected to GATT server.")
+                    if (status != BluetoothGatt.GATT_SUCCESS) {
+                        Log.e(TAG, "STATE_CONNECTED but status=$status (stack may disconnect)")
+                    }
+                    Log.i(TAG, "Connected to GATT server, status=$status")
                     gatt.discoverServices()
                     val name = gatt.device?.name ?: gatt.device?.address ?: "裝置"
                     _state.value = BleConnectionState.Connected(name)
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    Log.i(TAG, "Disconnected from GATT server.")
+                    Log.i(TAG, "Disconnected from GATT server, status=$status")
+                    if (bluetoothGatt == gatt) {
+                        bluetoothGatt = null
+                    }
+                    gatt.close()
                     _state.value = BleConnectionState.Disconnected
                 }
             }
@@ -136,6 +164,19 @@ class BleManager(context: Context) {
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             Log.d(TAG, "onServicesDiscovered status=$status")
+            if (status == BluetoothGatt.GATT_SUCCESS &&
+                gatt == bluetoothGatt &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
+            ) {
+                // 觸發 MTU 交握，否則對端 status notify 僅 20 bytes（預設 ATT MTU 23）。
+                @SuppressLint("MissingPermission")
+                val ok = gatt.requestMtu(517)
+                Log.d(TAG, "requestMtu(517) queued=$ok")
+            }
+        }
+
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            Log.d(TAG, "onMtuChanged mtu=$mtu status=$status")
         }
 
         override fun onCharacteristicWrite(

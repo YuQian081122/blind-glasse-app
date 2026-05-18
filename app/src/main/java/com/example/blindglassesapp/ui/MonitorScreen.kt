@@ -9,6 +9,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.webkit.WebView
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -23,20 +24,23 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -60,6 +64,7 @@ import com.example.blindglassesapp.network.FamilyEndpoints
 import com.example.blindglassesapp.network.FrameRepository
 import com.example.blindglassesapp.network.MonitorStateRepository
 import com.example.blindglassesapp.network.MonitorUiSnapshot
+import com.example.blindglassesapp.ui.theme.AppThemePreference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
@@ -83,9 +88,13 @@ private fun streamUrl() = "$MONITOR_BASE_URL/stream"
 @Composable
 fun MonitorScreen(
     onBack: () -> Unit,
+    themePreference: AppThemePreference,
+    onThemePreferenceChange: (AppThemePreference) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val outline = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    val cardShape = RoundedCornerShape(4.dp)
     val scroll = rememberScrollState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -230,7 +239,14 @@ fun MonitorScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text("即時監看") },
+                title = { Text("即時監看", style = MaterialTheme.typography.titleLarge) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    actionIconContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Text("←", style = MaterialTheme.typography.titleLarge)
@@ -239,7 +255,7 @@ fun MonitorScreen(
                 actions = {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(end = 12.dp),
+                        modifier = Modifier.padding(end = 4.dp),
                     ) {
                         val healthy = serverHealthy
                         if (healthy != null) {
@@ -247,7 +263,13 @@ fun MonitorScreen(
                                 modifier = Modifier
                                     .size(8.dp)
                                     .clip(CircleShape)
-                                    .background(if (healthy) Color(0xFF4CAF50) else Color(0xFFFF5252)),
+                                    .background(
+                                        if (healthy) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.error
+                                        },
+                                    ),
                             )
                             Spacer(Modifier.width(6.dp))
                         }
@@ -258,6 +280,11 @@ fun MonitorScreen(
                                 null -> ""
                             },
                             style = MaterialTheme.typography.labelSmall,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        ThemePreferenceOverflowMenu(
+                            current = themePreference,
+                            onChange = onThemePreferenceChange,
                         )
                     }
                 },
@@ -274,8 +301,12 @@ fun MonitorScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (!isOnline) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                OutlinedCard(
+                    shape = cardShape,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                    colors = CardDefaults.outlinedCardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                    ),
                 ) {
                     Text(
                         text = "無網路連線",
@@ -286,7 +317,11 @@ fun MonitorScreen(
                 }
             }
 
-            Card(modifier = Modifier.fillMaxWidth()) {
+            OutlinedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = cardShape,
+                border = outline,
+            ) {
                 Column(Modifier.padding(12.dp)) {
                     Text(frameStatusText, style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(4.dp))
@@ -294,9 +329,10 @@ fun MonitorScreen(
                 }
             }
 
-            Card(
+            OutlinedCard(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = cardShape,
+                border = outline,
             ) {
                 Box(
                     modifier = Modifier
@@ -316,33 +352,41 @@ fun MonitorScreen(
                         )
                     } else {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator()
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = contentColorFor(Color.Black).copy(alpha = 0.28f),
+                            )
                             Spacer(Modifier.height(12.dp))
                             Text(
                                 if (isOnline) "正在抓取畫面…" else "無網路，無法載入",
                                 style = MaterialTheme.typography.bodyMedium,
+                                color = contentColorFor(Color.Black),
                             )
                         }
                     }
                 }
             }
 
-            Card(
+            OutlinedCard(
                 modifier = Modifier.fillMaxWidth(),
+                shape = cardShape,
+                border = outline,
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Text("移動狀態", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = monitorSnap.motionLabel,
-                        style = MaterialTheme.typography.headlineSmall,
+                        style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
             }
 
-            Card(
+            OutlinedCard(
                 modifier = Modifier.fillMaxWidth(),
+                shape = cardShape,
+                border = outline,
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Text("GPS", style = MaterialTheme.typography.titleSmall)
@@ -357,14 +401,17 @@ fun MonitorScreen(
                         onClick = { monitorSnap.mapUrl?.let { openUrl(it) } },
                         enabled = !monitorSnap.mapUrl.isNullOrBlank(),
                         modifier = Modifier.fillMaxWidth(),
+                        shape = cardShape,
                     ) {
                         Text("在 Google 地圖開啟（外部瀏覽器）")
                     }
                 }
             }
 
-            Card(
+            OutlinedCard(
                 modifier = Modifier.fillMaxWidth(),
+                shape = cardShape,
+                border = outline,
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Text("地圖預覽", style = MaterialTheme.typography.titleSmall)
@@ -413,12 +460,14 @@ fun MonitorScreen(
                 OutlinedButton(
                     onClick = { openUrl(monitorPageUrl()) },
                     modifier = Modifier.weight(1f),
+                    shape = cardShape,
                 ) {
                     Text("監控頁", maxLines = 1)
                 }
                 OutlinedButton(
                     onClick = { openUrl(streamUrl()) },
                     modifier = Modifier.weight(1f),
+                    shape = cardShape,
                 ) {
                     Text("MJPEG", maxLines = 1)
                 }

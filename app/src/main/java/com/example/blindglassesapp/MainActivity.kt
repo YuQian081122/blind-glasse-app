@@ -12,7 +12,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
-import com.example.blindglassesapp.ui.theme.BlindGlassesAppTheme
 import com.example.blindglassesapp.viewmodel.MainViewModel
 
 class MainActivity : ComponentActivity() {
@@ -35,11 +34,9 @@ class MainActivity : ComponentActivity() {
         viewModel = ViewModelProvider(this)[MainViewModel::class.java]
 
         setContent {
-            BlindGlassesAppTheme {
-                BlindGlassesApp(
-                    onRequestBleScan = { checkPermissionsAndScan() },
-                )
-            }
+            BlindGlassesApp(
+                onRequestBleScan = { checkPermissionsAndScan() },
+            )
         }
     }
 
