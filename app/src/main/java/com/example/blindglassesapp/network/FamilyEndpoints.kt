@@ -1,16 +1,38 @@
 package com.example.blindglassesapp.network
 
-/** 正式站基底網址（監看頁寫死使用此常數）。 */
+import com.example.blindglassesapp.BuildConfig
+import okhttp3.Request
+
+/** Public server endpoints; deployment settings are injected at build time. */
 object FamilyEndpoints {
-    const val BASE = "https://blind-glasses.org"
+    const val MOBILE_APP_TOKEN_HEADER = "X-Mobile-App-Token"
 
-    const val FRAME = "$BASE/api/monitor/frame"
-    const val STATE = "$BASE/api/monitor/state"
-    const val LOCATION = "$BASE/api/family/location"
-    const val STREAM = "$BASE/stream"
-    const val MONITOR_PAGE = "$BASE/monitor"
-    const val HEALTH = "$BASE/health"
+    val BASE: String = BuildConfig.SERVER_BASE_URL.trimEnd('/')
 
-    const val WS_VIEWER = "wss://blind-glasses.org/ws/viewer"
-    const val WS_UI = "wss://blind-glasses.org/ws_ui"
+    val FRAME = "$BASE/api/monitor/frame"
+    val STATE = "$BASE/api/monitor/state"
+    val LOCATION = "$BASE/api/family/location"
+    val STREAM = "$BASE/stream"
+    val MONITOR_PAGE = "$BASE/monitor"
+    val HEALTH = "$BASE/health"
+
+    private val WEBSOCKET_BASE: String = when {
+        BASE.startsWith("https://") -> "wss://${BASE.removePrefix("https://")}"
+        BASE.startsWith("http://") -> "ws://${BASE.removePrefix("http://")}"
+        else -> BASE
+    }
+
+    val WS_VIEWER = "$WEBSOCKET_BASE/ws/viewer"
+    val WS_UI = "$WEBSOCKET_BASE/ws_ui"
+
+    internal fun authorize(
+        builder: Request.Builder,
+        token: String = BuildConfig.MOBILE_APP_TOKEN,
+    ): Request.Builder {
+        val cleanToken = token.trim()
+        if (cleanToken.isNotEmpty()) {
+            builder.header(MOBILE_APP_TOKEN_HEADER, cleanToken)
+        }
+        return builder
+    }
 }

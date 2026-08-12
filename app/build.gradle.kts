@@ -4,6 +4,19 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val configuredServerBaseUrl = providers.gradleProperty("SERVER_BASE_URL")
+    .orElse("https://blind-glasses.org")
+    .get()
+val escapedServerBaseUrl = configuredServerBaseUrl
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+val configuredMobileAppToken = providers.gradleProperty("MOBILE_APP_TOKEN")
+    .orElse("")
+    .get()
+val escapedMobileAppToken = configuredMobileAppToken
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+
 android {
     namespace = "com.example.blindglassesapp"
     compileSdk = 35
@@ -16,6 +29,8 @@ android {
         versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "SERVER_BASE_URL", "\"$escapedServerBaseUrl\"")
+        buildConfigField("String", "MOBILE_APP_TOKEN", "\"$escapedMobileAppToken\"")
     }
 
     buildTypes {
