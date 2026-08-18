@@ -12,11 +12,13 @@ import android.webkit.WebView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -26,10 +28,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material3.Icon
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -50,6 +56,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,20 +88,18 @@ private fun Context.hasInternetConnectivity(): Boolean {
     return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
 }
 
-private fun monitorPageUrl() = "$MONITOR_BASE_URL/monitor"
-private fun streamUrl() = "$MONITOR_BASE_URL/stream"
+// 網頁與獨立影像串流按鈕已移除，故相關輔助函數已清空
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MonitorScreen(
+    viewModel: com.example.blindglassesapp.viewmodel.MainViewModel,
     onBack: () -> Unit,
-    themePreference: AppThemePreference,
-    onThemePreferenceChange: (AppThemePreference) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val outline = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    val cardShape = RoundedCornerShape(4.dp)
+    val cardShape = RoundedCornerShape(16.dp)
     val scroll = rememberScrollState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -111,12 +116,35 @@ fun MonitorScreen(
     }
     var stateSource by remember { mutableStateOf("連線中…") }
     var serverHealthy by remember { mutableStateOf<Boolean?>(null) }
+    
+    val isStandalone by viewModel.isStandaloneMode.collectAsState()
+
+    val effectiveIsOnline = isOnline || isStandalone
+    val effectiveHasReceivedFrame = hasReceivedFrame || isStandalone
+    val effectiveHasReceivedState = hasReceivedState || isStandalone
+    val effectiveServerHealthy = if (isStandalone) true else serverHealthy
+    val effectiveMonitorSnap = if (isStandalone) {
+        MonitorUiSnapshot(
+            motionLabel = "步行中 (模擬)",
+            mapUrl = "https://www.google.com/maps/search/?api=1&query=25.033964,121.564468",
+            latitude = 25.033964,
+            longitude = 121.564468
+        )
+    } else {
+        monitorSnap
+    }
+    val effectiveCurrentFrame = if (isStandalone) {
+        currentFrame ?: Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.DKGRAY) }
+    } else {
+        currentFrame
+    }
 
     val frameRepo = remember {
         FrameRepository(baseUrl = MONITOR_BASE_URL, httpPollIntervalMs = 200L)
     }
     val stateRepo = remember { MonitorStateRepository(MONITOR_BASE_URL) }
 
+    // ── 網路監聽 (Preserved) ──
     DisposableEffect(context) {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val callback = object : ConnectivityManager.NetworkCallback() {
@@ -150,6 +178,7 @@ fun MonitorScreen(
         }
     }
 
+    // ── 畫面超時提示 (Preserved) ──
     LaunchedEffect(hasReceivedFrame, isOnline) {
         if (hasReceivedFrame) return@LaunchedEffect
         delay(20_000)
@@ -158,6 +187,7 @@ fun MonitorScreen(
         }
     }
 
+    // ── 影像串流 WebSocket / HTTP (Preserved) ──
     LaunchedEffect(Unit) {
         var wsOk = false
         try {
@@ -190,6 +220,7 @@ fun MonitorScreen(
         }
     }
 
+    // ── 狀態串流 WebSocket / HTTP (Preserved) ──
     LaunchedEffect(Unit) {
         serverHealthy = withContext(Dispatchers.IO) { stateRepo.checkHealth() }
         try {
@@ -207,15 +238,17 @@ fun MonitorScreen(
         }
     }
 
+    // ── openUrl (Preserved) ──
     fun openUrl(url: String) {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     }
 
-    val la = monitorSnap.latitude
-    val lo = monitorSnap.longitude
+    // ── 地圖與座標衍生值 (Preserved) ──
+    val la = effectiveMonitorSnap.latitude
+    val lo = effectiveMonitorSnap.longitude
     val embedUrl = remember(la, lo) {
         if (la != null && lo != null) {
-            String.format(Locale.US, "https://www.google.com/maps?q=%f,%f&z=17&output=embed", la, lo)
+            String.format(Locale.US, "https://maps.google.com/maps?q=%f,%f&z=17&output=embed", la, lo)
         } else null
     }
     val coordsText = when {
@@ -224,14 +257,15 @@ fun MonitorScreen(
         else -> "尚無 GPS 座標"
     }
 
+    // ── 狀態文字：去除技術名詞，只顯示「已同步」或「載入中」──
     val frameStatusText = when {
-        !isOnline -> "畫面：無網路"
-        hasReceivedFrame -> "畫面：已取得（$frameSource）"
+        !effectiveIsOnline -> "畫面：無網路"
+        effectiveHasReceivedFrame -> "畫面：已取得"
         else -> "畫面：載入中…"
     }
     val stateStatusText = when {
-        !isOnline -> "狀態：無網路"
-        hasReceivedState -> "狀態：已同步（$stateSource）"
+        !effectiveIsOnline -> "狀態：無網路"
+        effectiveHasReceivedState -> "狀態：已同步"
         else -> "狀態：載入中…"
     }
 
@@ -247,17 +281,13 @@ fun MonitorScreen(
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
                     actionIconContentColor = MaterialTheme.colorScheme.onSurface,
                 ),
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Text("←", style = MaterialTheme.typography.titleLarge)
-                    }
-                },
+
                 actions = {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(end = 4.dp),
                     ) {
-                        val healthy = serverHealthy
+                        val healthy = effectiveServerHealthy
                         if (healthy != null) {
                             Box(
                                 modifier = Modifier
@@ -265,7 +295,7 @@ fun MonitorScreen(
                                     .clip(CircleShape)
                                     .background(
                                         if (healthy) {
-                                            MaterialTheme.colorScheme.primary
+                                            Color(0xFF4CAF50) // Green for healthy
                                         } else {
                                             MaterialTheme.colorScheme.error
                                         },
@@ -275,17 +305,13 @@ fun MonitorScreen(
                         }
                         Text(
                             text = when (healthy) {
-                                true -> "伺服器 OK"
-                                false -> "健康檢查失敗"
+                                true -> "伺服器連線正常"
+                                false -> "伺服器連線異常"
                                 null -> ""
                             },
                             style = MaterialTheme.typography.labelSmall,
                         )
                         Spacer(Modifier.width(4.dp))
-                        ThemePreferenceOverflowMenu(
-                            current = themePreference,
-                            onChange = onThemePreferenceChange,
-                        )
                     }
                 },
             )
@@ -296,11 +322,10 @@ fun MonitorScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(innerPadding)
-                .verticalScroll(scroll)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .verticalScroll(scroll),
         ) {
-            if (!isOnline) {
+            // ── 無網路橫幅 ──
+            if (!effectiveIsOnline) {
                 OutlinedCard(
                     shape = cardShape,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
@@ -317,162 +342,237 @@ fun MonitorScreen(
                 }
             }
 
-            OutlinedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = cardShape,
-                border = outline,
+            // ══════════════════════════════════════════════════════
+            // 區塊一：即時影像中樞 (Edge-to-Edge Hero Video)
+            // ══════════════════════════════════════════════════════
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(280.dp)
+                    .background(Color.Black),
+                contentAlignment = Alignment.Center,
             ) {
-                Column(Modifier.padding(12.dp)) {
-                    Text(frameStatusText, style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(4.dp))
-                    Text(stateStatusText, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-
-            OutlinedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = cardShape,
-                border = outline,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(260.dp)
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (currentFrame != null) {
-                        Image(
-                            bitmap = currentFrame!!.asImageBitmap(),
-                            contentDescription = "即時影像",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(260.dp),
-                            contentScale = ContentScale.Fit,
+                if (effectiveCurrentFrame != null) {
+                    Image(
+                        bitmap = effectiveCurrentFrame.asImageBitmap(),
+                        contentDescription = "即時影像",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(),
+                        contentScale = ContentScale.Fit,
+                    )
+                } else {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = contentColorFor(Color.Black).copy(alpha = 0.28f),
                         )
-                    } else {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(
-                                color = MaterialTheme.colorScheme.primary,
-                                trackColor = contentColorFor(Color.Black).copy(alpha = 0.28f),
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            Text(
-                                if (isOnline) "正在抓取畫面…" else "無網路，無法載入",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = contentColorFor(Color.Black),
-                            )
-                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            if (effectiveIsOnline) "正在抓取畫面…" else "無網路，無法載入",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = contentColorFor(Color.Black),
+                        )
                     }
                 }
             }
 
-            OutlinedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = cardShape,
-                border = outline,
+            // 連線狀態列 (黑底，直接黏在影片下方，營造一體感)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("移動狀態", style = MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.height(8.dp))
+                // 畫面狀態
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    !effectiveIsOnline -> MaterialTheme.colorScheme.error
+                                    effectiveHasReceivedFrame -> Color(0xFF4CAF50)
+                                    else -> MaterialTheme.colorScheme.outlineVariant
+                                },
+                            ),
+                    )
+                    Spacer(Modifier.width(8.dp))
                     Text(
-                        text = monitorSnap.motionLabel,
-                        style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.fillMaxWidth(),
+                        text = frameStatusText,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // 狀態同步
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    !effectiveIsOnline -> MaterialTheme.colorScheme.error
+                                    effectiveHasReceivedState -> Color(0xFF4CAF50)
+                                    else -> MaterialTheme.colorScheme.outlineVariant
+                                },
+                            ),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = stateStatusText,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
 
-            OutlinedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = cardShape,
-                border = outline,
+            Spacer(Modifier.height(24.dp))
+
+            // ══════════════════════════════════════════════════════
+            // 區塊二：遙測數據區 (Key-Value List, no card)
+            // ══════════════════════════════════════════════════════
+            Column(
+                modifier = Modifier.padding(horizontal = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("GPS", style = MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "遙測數據",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // 移動狀態
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "移動狀態",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = effectiveMonitorSnap.motionLabel,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+
+                // GPS 座標
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "目前位置",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Text(
                         text = coordsText,
                         style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.fillMaxWidth(),
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
-                    Spacer(Modifier.height(12.dp))
-                    Button(
-                        onClick = { monitorSnap.mapUrl?.let { openUrl(it) } },
-                        enabled = !monitorSnap.mapUrl.isNullOrBlank(),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = cardShape,
-                    ) {
-                        Text("在 Google 地圖開啟（外部瀏覽器）")
-                    }
                 }
-            }
-
-            OutlinedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = cardShape,
-                border = outline,
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("地圖預覽", style = MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.height(8.dp))
-                    if (embedUrl != null) {
-                        key(embedUrl) {
-                            @SuppressLint("SetJavaScriptEnabled")
-                            AndroidView(
-                                factory = { ctx ->
-                                    WebView(ctx).apply {
-                                        settings.javaScriptEnabled = true
-                                        settings.domStorageEnabled = true
-                                        loadUrl(embedUrl)
-                                    }
-                                },
-                                update = { wv -> wv.loadUrl(embedUrl) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(220.dp),
-                            )
-                        }
-                    } else {
-                        Box(
+                
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                
+                Spacer(Modifier.height(8.dp))
+                
+                // 地圖預覽 (Empty State Skeleton Screen 或 實際 WebView)
+                Text(
+                    text = "地圖預覽",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                if (embedUrl != null) {
+                    key(embedUrl) {
+                        @SuppressLint("SetJavaScriptEnabled")
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    webViewClient = android.webkit.WebViewClient()
+                                    
+                                    val html = """
+                                        <!DOCTYPE html>
+                                        <html>
+                                        <head>
+                                            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+                                            <style>body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }</style>
+                                        </head>
+                                        <body>
+                                            <iframe width="100%" height="100%" frameborder="0" style="border:0" src="$embedUrl" allowfullscreen></iframe>
+                                        </body>
+                                        </html>
+                                    """.trimIndent()
+                                    loadDataWithBaseURL("https://maps.google.com", html, "text/html", "UTF-8", null)
+                                }
+                            },
+                            update = { },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(120.dp)
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                            contentAlignment = Alignment.Center,
-                        ) {
+                                .height(220.dp)
+                                .clip(RoundedCornerShape(12.dp)),
+                        )
+                    }
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    FilledTonalButton(
+                        onClick = { effectiveMonitorSnap.mapUrl?.let { openUrl(it) } },
+                        enabled = !effectiveMonitorSnap.mapUrl.isNullOrBlank(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text("在 Google 地圖中開啟")
+                    }
+                } else {
+                    // Empty State: Skeleton Screen + Radar Scanning Animation
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(Modifier.height(16.dp))
                             Text(
-                                "取得座標後顯示地圖",
+                                "正在搜尋 GPS 訊號...",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(16.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
                             )
                         }
                     }
                 }
+                
+                Spacer(Modifier.height(32.dp))
             }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(
-                    onClick = { openUrl(monitorPageUrl()) },
-                    modifier = Modifier.weight(1f),
-                    shape = cardShape,
-                ) {
-                    Text("監控頁", maxLines = 1)
-                }
-                OutlinedButton(
-                    onClick = { openUrl(streamUrl()) },
-                    modifier = Modifier.weight(1f),
-                    shape = cardShape,
-                ) {
-                    Text("MJPEG", maxLines = 1)
-                }
-            }
-            Spacer(Modifier.height(24.dp))
         }
     }
 }

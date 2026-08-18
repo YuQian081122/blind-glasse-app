@@ -28,6 +28,8 @@ class BleManager(context: Context) {
         private const val TAG = "BleManager"
         private val SERVICE_UUID = UUID.fromString("6f2f6d30-4d57-4c76-a5dd-86f4d2a06340")
         private val WIFI_APPLY_CHAR_UUID = UUID.fromString("6f2f6d33-4d57-4c76-a5dd-86f4d2a06340")
+        private val FIND_ME_UUID = UUID.fromString("6f2f6d34-4d57-4c76-a5dd-86f4d2a06340")
+        private val VOLUME_UUID = UUID.fromString("6f2f6d37-4d57-4c76-a5dd-86f4d2a06340")
         private const val SCAN_PERIOD_MS = 10_000L
     }
 
@@ -44,6 +46,9 @@ class BleManager(context: Context) {
     val writeResult: StateFlow<WriteResult?> = _writeResult.asStateFlow()
 
     private val foundDevices = mutableListOf<BluetoothDevice>()
+
+    val isBluetoothSupported: Boolean
+        get() = bluetoothAdapter != null
 
     val isBluetoothEnabled: Boolean
         get() = bluetoothAdapter?.isEnabled == true
@@ -206,6 +211,45 @@ class BleManager(context: Context) {
             put("wifiApply", 1)
         }
         val payload = json.toString().toByteArray(Charsets.UTF_8)
+
+        _writeResult.value = null
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeCharacteristic(char, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothGatt.GATT_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            char.value = payload
+            @Suppress("DEPRECATION")
+            gatt.writeCharacteristic(char)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun writeFindMe(): Boolean {
+        val gatt = bluetoothGatt ?: return false
+        val service = gatt.getService(SERVICE_UUID) ?: return false
+        val char = service.getCharacteristic(FIND_ME_UUID) ?: return false
+
+        val payload = "1".toByteArray(Charsets.UTF_8)
+
+        _writeResult.value = null
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeCharacteristic(char, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothGatt.GATT_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            char.value = payload
+            @Suppress("DEPRECATION")
+            gatt.writeCharacteristic(char)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun writeVolume(volume: Int): Boolean {
+        val vol = volume.coerceIn(0, 21)
+        val gatt = bluetoothGatt ?: return false
+        val service = gatt.getService(SERVICE_UUID) ?: return false
+        val char = service.getCharacteristic(VOLUME_UUID) ?: return false
+
+        val payload = vol.toString().toByteArray(Charsets.UTF_8)
 
         _writeResult.value = null
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

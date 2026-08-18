@@ -1,0 +1,436 @@
+package com.example.blindglassesapp.ui
+
+import android.app.Activity
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import com.example.blindglassesapp.ble.BleConnectionState
+import com.example.blindglassesapp.tts.TtsManager
+import com.example.blindglassesapp.viewmodel.EmergencyState
+import com.example.blindglassesapp.viewmodel.MainViewModel
+
+/**
+ * 功能描述資料類別。
+ */
+data class AccessibilityFeature(
+    val name: String,
+    val action: () -> Unit
+)
+
+/**
+ * 盲人專用全螢幕無障礙功能頁面。
+ *
+ * 使用 WCAG 規範的「語意大按鈕清單 (Semantic List)」設計，
+ * 以 LazyVerticalGrid (2 欄) 呈現所有功能按鈕，完全相容 TalkBack。
+ *
+ * 取代舊版 pointerInput 多指手勢方案，避免與系統輔助功能衝突。
+ */
+@Composable
+fun AccessibilityScreen(
+    viewModel: MainViewModel,
+    ttsManager: TtsManager,
+    onBack: () -> Unit
+) {
+    // ── 保留的 ViewModel 狀態 ──
+    val bleState by viewModel.bleState.collectAsState()
+    val volume by viewModel.currentVolume.collectAsState()
+    val isConnected = bleState is BleConnectionState.Connected
+    val isVolumeActive by viewModel.isVolumeAdjustmentActive.collectAsState()
+    val emergencyState by viewModel.emergencyState.collectAsState()
+
+    var lastTappedFeature by remember { mutableStateOf<String?>(null) }
+    var lastTapTime by remember { mutableLongStateOf(0L) }
+    
+    // 用於記錄 TalkBack 狀態以顯示提示 (避免重組影響)
+    val isTalkBackEnabled = remember(ttsManager.isTalkBackEnabled) { ttsManager.isTalkBackEnabled }
+
+    val view = LocalView.current
+
+    // ── 實體返回鍵處理 ──
+    BackHandler {
+        ttsManager.stop()
+        viewModel.setVolumeAdjustmentActive(false)
+        ttsManager.speak("已退出盲人模式")
+        onBack()
+    }
+
+    // ── 保留的沉浸模式邏輯 ──
+    // 進入頁面時自動隱藏導覽列與狀態列（進入沉浸模式，防誤觸）
+    DisposableEffect(view) {
+        viewModel.setAccessibilityModeActive(true)
+        val window = (view.context as? Activity)?.window
+        if (window != null) {
+            val insetsController = WindowCompat.getInsetsController(window, view)
+            insetsController.hide(WindowInsetsCompat.Type.systemBars())
+            insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+
+            onDispose {
+                insetsController.show(WindowInsetsCompat.Type.systemBars())
+                viewModel.setVolumeAdjustmentActive(false)
+                viewModel.setAccessibilityModeActive(false)
+            }
+        } else {
+            onDispose {
+                viewModel.setVolumeAdjustmentActive(false)
+                viewModel.setAccessibilityModeActive(false)
+            }
+        }
+    }
+
+    // ── 監聽外部退出事件 ──
+    LaunchedEffect(Unit) {
+        viewModel.closeAccessibilityEvent.collect {
+            onBack()
+        }
+    }
+
+    var showDeviceSheet by remember { mutableStateOf(false) }
+    var lastFindMeClickTime by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(bleState) {
+        when (bleState) {
+            is BleConnectionState.DevicesFound -> showDeviceSheet = true
+            is BleConnectionState.Connected -> {
+                showDeviceSheet = false
+                ttsManager.speak("眼鏡連線成功")
+            }
+            is BleConnectionState.Error -> ttsManager.speak((bleState as BleConnectionState.Error).message)
+            is BleConnectionState.Disconnected -> ttsManager.speak("眼鏡已斷開連線")
+            else -> {}
+        }
+    }
+
+    // ── 進入頁面時播報說明 ──
+    LaunchedEffect(Unit) {
+        val hintText = if (!isTalkBackEnabled) "。提示：點擊一次按鈕會唸出按鈕名稱，快速連點兩下即可執行功能。" else ""
+        if (isConnected) {
+            ttsManager.speak("已進入盲人模式。眼鏡已連線$hintText")
+        } else {
+            ttsManager.speak("已進入盲人模式。眼鏡尚未連線$hintText")
+        }
+    }
+
+    // ── 監聽緊急求助狀態，播報 TTS 回饋 ──
+    LaunchedEffect(emergencyState) {
+        when (emergencyState) {
+            EmergencyState.SENDING -> ttsManager.speak("正在發送緊急求助，請稍候")
+            EmergencyState.SENT -> {
+                ttsManager.speak("已成功通知家屬，請留在安全處並保持通訊")
+                viewModel.resetEmergencyState()
+            }
+            EmergencyState.FAILED -> {
+                ttsManager.speak("通知失敗，請重試或直接撥打電話")
+                viewModel.resetEmergencyState()
+            }
+            EmergencyState.IDLE -> { /* 無需播報 */ }
+        }
+    }
+
+    // ── 合併後的功能清單 (allFeatures) ──
+    val allFeatures = remember(isConnected, volume) {
+        listOf(
+            AccessibilityFeature("連接眼鏡\n(連線設備)") {
+                if (!viewModel.isBluetoothEnabled) {
+                    ttsManager.speak("沒開啟藍牙")
+                } else if (isConnected) {
+                    ttsManager.speak("眼鏡已連線，不需重複連接")
+                } else {
+                    ttsManager.speak("開始掃描周圍眼鏡，請稍後")
+                    viewModel.startScan()
+                }
+            },
+            AccessibilityFeature("尋找眼鏡\n(發出聲音)") {
+                if (!isConnected) {
+                    ttsManager.speak("眼鏡尚未連線")
+                } else {
+                    val now = System.currentTimeMillis()
+                    if (now - lastFindMeClickTime < 1500) {
+                        // 1.5秒內連續點擊，不重複發送藍牙封包以避免通道忙碌，但照常播報語音提供即時回饋
+                        ttsManager.speak("找眼鏡")
+                        return@AccessibilityFeature
+                    }
+                    lastFindMeClickTime = now
+
+                    val sent = viewModel.sendFindMe()
+                    if (sent) ttsManager.speak("找眼鏡")
+                    else ttsManager.speak("尋找失敗")
+                }
+            },
+            AccessibilityFeature("調整眼鏡音量\n(語音大小)") {
+                if (!isConnected) {
+                    ttsManager.speak("眼鏡尚未連線")
+                } else {
+                    viewModel.setVolumeAdjustmentActive(true)
+                    ttsManager.speak("已進入音量調整模式。現在音量是 ${viewModel.currentVolume.value}。請使用手機側邊音量按鍵調整音量。點擊螢幕任意處即可退出。")
+                }
+            },
+            AccessibilityFeature("查詢眼鏡電量\n(剩餘電量)") {
+                if (isConnected || viewModel.isStandaloneMode.value) {
+                    viewModel.checkBatteryLevel { batteryStr ->
+                        if (batteryStr == "未知") {
+                            ttsManager.speak("目前無法取得眼鏡電量")
+                        } else {
+                            ttsManager.speak("眼鏡電量 $batteryStr")
+                        }
+                    }
+                } else {
+                    ttsManager.speak("眼鏡未連線，無法查詢電量")
+                }
+            },
+            AccessibilityFeature("導航回家\n(語音導航)") {
+                if (!isConnected) {
+                    ttsManager.speak("眼鏡尚未連線")
+                } else {
+                    ttsManager.speak("正在發送導航請求...")
+                    viewModel.navigateHome(view.context) { success ->
+                        if (success) {
+                            ttsManager.speak("準備導航回家，請聽從眼鏡語音指示")
+                        } else {
+                            ttsManager.speak("導航啟動失敗，請確認是否已設定住家地址且有GPS訊號")
+                        }
+                    }
+                }
+            },
+            AccessibilityFeature("緊急求助\n(通知家屬)") {
+                if (!isConnected) {
+                    ttsManager.speak("眼鏡尚未連線")
+                } else {
+                    viewModel.sendEmergency()
+                }
+            }
+        )
+    }
+
+    // ── 主 UI ──
+    Scaffold(
+        containerColor = Color.Black
+    ) { innerPadding ->
+
+        if (isVolumeActive) {
+            // ━━━━ 音量調整模式：滿版全螢幕按鈕 ━━━━
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentAlignment = Alignment.Center
+            ) {
+                FilledTonalButton(
+                    onClick = {
+                        viewModel.setVolumeAdjustmentActive(false)
+                        ttsManager.speak("已退出音量調整模式")
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                        .semantics {
+                            onClick(label = "退出音量調整模式") { true }
+                        },
+                    shape = MaterialTheme.shapes.extraLarge,
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "音量調整中",
+                            fontSize = 36.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Text(
+                            text = "目前音量：$volume",
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Text(
+                            text = "請按手機實體音量鍵",
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(32.dp))
+                        Text(
+                            text = "點擊此處退出音量調整",
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+        } else {
+            // ━━━━ 主要功能清單：大按鈕網格 ━━━━
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                // 標題區域
+                Text(
+                    text = "盲人模式",
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp, bottom = 8.dp)
+                )
+
+
+
+                // 連線狀態提示
+                if (!isConnected) {
+                    Text(
+                        text = "眼鏡尚未連線",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp)
+                    )
+                }
+
+                // 功能按鈕網格 (2 欄)
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    items(allFeatures) { feature ->
+                        FilledTonalButton(
+                            onClick = {
+                                val now = System.currentTimeMillis()
+                                if (isTalkBackEnabled) {
+                                    // TalkBack 開啟時，本身就具備防誤觸，直接執行
+                                    feature.action()
+                                } else {
+                                    // 關閉 TalkBack 時，實作雙擊防誤觸
+                                    if (lastTappedFeature == feature.name && (now - lastTapTime) < 1000L) {
+                                        lastTappedFeature = null
+                                        feature.action()
+                                    } else {
+                                        lastTappedFeature = feature.name
+                                        lastTapTime = now
+                                        ttsManager.speak("${feature.name.replace("\n", "").replace(Regex("\\(.*\\)"), "")}按鈕")
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = 120.dp)
+                                .semantics {
+                                    onClick(label = "執行${feature.name}功能") { true }
+                                },
+                            shape = MaterialTheme.shapes.large,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        ) {
+                            Text(
+                                text = feature.name,
+                                fontSize = 20.sp,
+                                lineHeight = 28.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                                maxLines = 3
+                            )
+                        }
+                    }
+                }
+
+                // ── 退出盲人模式按鈕 ──
+                Spacer(modifier = Modifier.height(12.dp))
+
+                FilledTonalButton(
+                    onClick = {
+                        val now = System.currentTimeMillis()
+                        if (isTalkBackEnabled) {
+                            ttsManager.stop()
+                            viewModel.setVolumeAdjustmentActive(false)
+                            ttsManager.speak("已退出盲人模式")
+                            onBack()
+                        } else {
+                            if (lastTappedFeature == "退出盲人模式" && (now - lastTapTime) < 1000L) {
+                                lastTappedFeature = null
+                                ttsManager.stop()
+                                viewModel.setVolumeAdjustmentActive(false)
+                                ttsManager.speak("已退出盲人模式")
+                                onBack()
+                            } else {
+                                lastTappedFeature = "退出盲人模式"
+                                lastTapTime = now
+                                ttsManager.speak("退出盲人模式按鈕")
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 120.dp)
+                        .padding(horizontal = 12.dp, vertical = 12.dp)
+                        .semantics {
+                            onClick(label = "退出盲人模式，返回上一頁") { true }
+                        },
+                    shape = MaterialTheme.shapes.large,
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                ) {
+                    Text(
+                        text = "退出盲人模式",
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+    }
+
+    // ── 藍牙裝置清單底層表單 ──
+    if (showDeviceSheet && bleState is BleConnectionState.DevicesFound) {
+        DeviceListSheet(
+            devices = (bleState as BleConnectionState.DevicesFound).devices,
+            onDeviceSelected = { device ->
+                showDeviceSheet = false
+                viewModel.connectDevice(device)
+            },
+            onDismiss = {
+                showDeviceSheet = false
+                viewModel.dismissDeviceListResults()
+            }
+        )
+    }
+}

@@ -13,9 +13,3 @@
 .externalNativeBuild
 .cxx
 local.properties
-
-# 建置與工具快取（勿提交）
-app/build/
-.kotlin/
-**/*.apk
-**/*.ap_
